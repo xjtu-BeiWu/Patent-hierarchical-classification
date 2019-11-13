@@ -80,13 +80,33 @@ def model():
 
     textual_embedding = tflearn.lstm(textual_inf, 128, dropout=0.8, name='lstm')
     network = tf.concat([textual_embedding, input_citation], 1)
-    network = tflearn.fully_connected(network, 128, activation='softmax')
+    network = tflearn.fully_connected(network, 128, activation='elu')
     network = _cat_weighted(network, section_embedding)
     network = _cat_weighted(network, subsection_embedding)
     network = tf.matmul(network, tf.transpose(class_embedding), name='class_weight')
-    network = tflearn.softmax(network)
-    network = tflearn.regression(network, optimizer='adam', learning_rate=0.001, loss='categorical_crossentropy')
+    # network = tflearn.softmax(network)
+    network = tflearn.sigmoid(network)
+    # network = tflearn.regression(network, optimizer='adam', learning_rate=0.001, loss='categorical_crossentropy')
+    # tflearn.objectives.binary_crossentropy(y_pred, y_true) Computes sigmoid cross entropy between y_pred (logits) and y_true (labels).
+    network = tflearn.regression(network, optimizer='adam', learning_rate=0.001, loss='binary_crossentropy')
     return network
+
+
+def loss_multilabel(self, l2_lambda=0.0001):  # 0.0001 this loss function is for multi-label classification
+    with tf.name_scope("loss"):
+        # input: `logits` and `labels` must have the same shape `[batch_size, num_classes]`
+        # output: A 1-D `Tensor` of length `batch_size` of the same type as `logits` with the softmax cross entropy loss.
+        # input_y:shape=(?, 1999); logits:shape=(?, 1999)
+        # let `x = logits`, `z = labels`.  The logistic loss is:z * -log(sigmoid(x)) + (1 - z) * -log(1 - sigmoid(x))
+        losses = tf.nn.sigmoid_cross_entropy_with_logits(labels=self.input_y_multilabel,
+                                                         logits=self.logits);  # losses=tf.nn.softmax_cross_entropy_with_logits(labels=self.input__y,logits=self.logits)
+        # losses=-self.input_y_multilabel*tf.log(self.logits)-(1-self.input_y_multilabel)*tf.log(1-self.logits)
+        print("sigmoid_cross_entropy_with_logits.losses:", losses)  # shape=(?, 1999).
+        losses = tf.reduce_sum(losses, axis=1)  # shape=(?,). loss for all data in the batch
+        loss = tf.reduce_mean(losses)  # shape=().   average loss in the batch
+        l2_losses = tf.add_n([tf.nn.l2_loss(v) for v in tf.trainable_variables() if 'bias' not in v.name]) * l2_lambda
+        loss = loss + l2_losses
+    return loss
 
 
 def onehot2categories(arr):
@@ -101,9 +121,24 @@ def onehot2categories(arr):
         return temp
 
 
+def output(arr):
+    temp = []
+    for i in range(len(arr)):
+        # print(arr[i])
+        temp2 = []
+        for j in range(len(arr[i])):
+            if arr[i][j] > 0.5:
+                temp2.append(1)
+            else:
+                temp2.append(0)
+        temp.append(temp2)
+    return temp
+
+
 def _cat_weighted(patent, category):
     weight = tf.matmul(patent, tf.transpose(category))
-    probability = tf.nn.softmax(weight)  # 加一个softmax
+    # probability = tf.nn.softmax(weight)  # 加一个softmax
+    probability = tf.nn.sigmoid(weight)  # 加sigmoid，将所有值映射到0-1之间
     new_patent = tf.matmul(probability, category)
     return new_patent
 
@@ -120,6 +155,7 @@ def print_evaluation_scores(test_labels_trans, test_predict_trans):
     print("f1_score_micro:", f1_score_micro)
     print("f1_score_weighted:", f1_score_weighted)
     print("hamming_loss:", hamming)
+    print("test_auc: ", test_auc)
 
 
 # add early_stopping
