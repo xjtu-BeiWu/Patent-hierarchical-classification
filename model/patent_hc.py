@@ -17,6 +17,8 @@ from sklearn.metrics import accuracy_score, f1_score, hamming_loss, roc_auc_scor
 # from tflearn.data_utils import to_categorical
 from tflearn.callbacks import Callback
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
+
 TRAIN_SIZE = 0
 VALIDATION_SIZE = 0
 
@@ -28,12 +30,12 @@ NUM_SEC: The number of categories in section layer
 NUM_SECS: The number of categories in subsection layer
 DIM_FEATURES = DIM_TEXT + NUM_SEC + NUM_SUBS + DIM_CITATION
 """
-NUM_CLASS = 0
-DIM_TEXT = 0
-DIM_CITATION = 0
-NUM_SEC = 0
-NUM_SUBS = 0
-DIM_FEATURES = 0
+NUM_CLASS = 629
+DIM_TEXT = 100
+DIM_CITATION = 128
+NUM_SEC = 8
+NUM_SUBS = 123
+DIM_FEATURES = 359  # DIM_FEATURES = DIM_TEXT + DIM_CITATION + NUM_SEC + NUM_SUBS
 
 
 def load_data_shuffle(data_path, pre_label_path):
@@ -61,7 +63,7 @@ def load_data_shuffle(data_path, pre_label_path):
     return train_data, train_label, validation_data, validation_label, test_data, test_label
 
 
-def model():
+def model(dim_embedding, batch_s):
     # Building model
     input_layer = tflearn.input_data(shape=[None, DIM_FEATURES], name='input')
     input_text = input_layer[:, 0:DIM_TEXT]
@@ -72,15 +74,15 @@ def model():
     input_subsection = onehot2categories(input_subsection)
     # section_embedding = tf.Variable(tf.random_normal([NUM_SEC, 128]), name='group_embedding')
     # subsection_embedding = tf.Variable(tf.random_normal([NUM_SUBS, 128]), name='group_embedding')
-    textual_inf = tflearn.embedding(input_text, input_dim=142698, output_dim=128, name='word_embedding')
-    section_embedding = tflearn.embedding(input_section, input_dim=NUM_SEC, output_dim=128, name='section_embedding')
-    subsection_embedding = tflearn.embedding(input_subsection, input_dim=NUM_SUBS, output_dim=128,
+    textual_inf = tflearn.embedding(input_text, input_dim=142698, output_dim=dim_embedding, name='word_embedding')
+    section_embedding = tflearn.embedding(input_section, input_dim=NUM_SEC, output_dim=dim_embedding, name='section_embedding')
+    subsection_embedding = tflearn.embedding(input_subsection, input_dim=NUM_SUBS, output_dim=dim_embedding,
                                              name='subsection_embedding')
-    class_embedding = tf.Variable(tf.random_normal([NUM_CLASS, 128]), name='class_embedding')
+    class_embedding = tf.Variable(tf.random_normal([NUM_CLASS, dim_embedding]), name='class_embedding')
 
-    textual_embedding = tflearn.lstm(textual_inf, 128, dropout=0.8, name='lstm')
+    textual_embedding = tflearn.lstm(textual_inf, dim_embedding, dropout=0.8, name='lstm')
     network = tf.concat([textual_embedding, input_citation], 1)
-    network = tflearn.fully_connected(network, 128, activation='elu')
+    network = tflearn.fully_connected(network, dim_embedding, activation='elu')
     network = _cat_weighted(network, section_embedding)
     network = _cat_weighted(network, subsection_embedding)
     network = tf.matmul(network, tf.transpose(class_embedding), name='class_weight')
@@ -88,7 +90,7 @@ def model():
     network = tflearn.sigmoid(network)
     # network = tflearn.regression(network, optimizer='adam', learning_rate=0.001, loss='categorical_crossentropy')
     # tflearn.objectives.binary_crossentropy(y_pred, y_true) Computes sigmoid cross entropy between y_pred (logits) and y_true (labels).
-    network = tflearn.regression(network, optimizer='adam', learning_rate=0.001, loss='binary_crossentropy')
+    network = tflearn.regression(network, optimizer='adam', learning_rate=0.001, dtype=tf.float64, batch_size=batch_s, loss='binary_crossentropy')
     return network
 
 
@@ -159,23 +161,23 @@ def print_evaluation_scores(test_labels_trans, test_predict_trans):
 
 
 # add early_stopping
-def train_predict(network, x, y, val_x, val_y, model_file, test_x, test_y):
-    mdl = tflearn.DNN(network, tensorboard_dir="/data/users/lzh/bwu/model/penNet3/citation/64_50_test_shuffle2"
-                                               "/tflearn_logs/",
-                      checkpoint_path='/data/users/lzh/bwu/model/penNet3/citation/64_50_test_shuffle2/model.tfl.ckpt')
-    if os.path.isfile(model_file):
-        mdl.load(model_file)
+def train_predict(network, x, y, val_x, val_y, model_root_path, test_x, test_y, bs, epoch_num):
+    mdl = tflearn.DNN(network, tensorboard_dir=model_root_path+"/tflearn_logs/",
+                      checkpoint_path=model_root_path+"/model.tfl.ckpt")
+    model_file_path = model_root_path+"model.tfl"
+    if os.path.isfile(model_file_path):
+        mdl.load(model_file_path)
     early_stopping_cb = EarlyStoppingCallback(val_acc_thresh=0.90)
     try:
-        mdl.fit(x, y, validation_set=(val_x, val_y), n_epoch=100, shuffle=True,
+        mdl.fit(x, y, validation_set=(val_x, val_y), n_epoch=epoch_num, shuffle=True,
                 snapshot_epoch=True,  # Snapshot (save & evaluate) model every epoch.
-                show_metric=True, batch_size=64, callbacks=early_stopping_cb, run_id='penNet')
+                show_metric=True, batch_size=bs, callbacks=early_stopping_cb, run_id='model')
     except StopIteration:
         print("OK, stop iterate!Good!")
-    # model.fit(x, y, n_epoch=50, validation_set=(val_x, val_y), shuffle=True,
-    #           show_metric=True, batch_size=64, callbacks=early_stopping_cb, run_id='penNet')  # epoch = 100
+    # model.fit(x, y, n_epoch=num_epoch, validation_set=(val_x, val_y), shuffle=True,
+    #           show_metric=True, batch_size=bs, callbacks=early_stopping_cb, run_id='penNet')  # epoch = 150
     # Save the model
-    mdl.save(model_file)
+    mdl.save(model_file_path)
     print('Model storage is finished')
     test_predict = mdl.predict(test_x)
     test_predict_trans = [np.argmax(one_hot) for one_hot in test_predict]
@@ -211,13 +213,14 @@ class EarlyStoppingCallback(tflearn.callbacks.Callback):
 
 
 if __name__ == '__main__':
-    feature_path = ''
-    label_path = ''
-    model_path = ''
-    index_dim = 100
+    feature_path = '/home/wubei/data_100_5_npy/all_vector.npy'
+    label_path = '/home/wubei/data_100_5_npy/class_vector.npy'
+    model_path = '/home/wubei/model/100_5_1024_150/'  # NameSpace: "textual_dim"_"lowest word frequency"_"batch_size"_"num_epoch"
     embedding_dim = 128
+    batch_size = 1024
+    num_epoch = 150
     train_features, train_labels, validation_features, validation_labels, test_features, test_labels \
         = load_data_shuffle(feature_path, label_path)
-    net = model()
+    net = model(embedding_dim, batch_size)
     train_predict(net, train_features, train_labels, validation_features, validation_labels,
-                  model_path, test_features, test_labels)
+                  model_path, test_features, test_labels, batch_size, num_epoch)
