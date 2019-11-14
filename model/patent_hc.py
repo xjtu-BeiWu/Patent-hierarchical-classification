@@ -19,8 +19,8 @@ from tflearn.callbacks import Callback
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
 
-TRAIN_SIZE = 0
-VALIDATION_SIZE = 0
+TRAIN_SIZE = 1445752  # 8:1:1
+VALIDATION_SIZE = 180718
 
 """
 NUM_CLASS: The number of candidate categories
