@@ -17,7 +17,7 @@ from sklearn.metrics import accuracy_score, f1_score, hamming_loss, roc_auc_scor
 # from tflearn.data_utils import to_categorical
 from tflearn.callbacks import Callback
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1, 2, 3"
 
 TRAIN_SIZE = 1445752  # 8:1:1
 VALIDATION_SIZE = 180718
@@ -42,7 +42,6 @@ def load_data_shuffle(data_path, pre_label_path):
     start_time = time.time()
     features = np.load(data_path).astype(dtype=np.float64)
     labels = np.load(pre_label_path).astype(dtype=np.int32)
-    # labels = to_categorical(labels, NUM_CLASS)
 
     # Generate a validation set.
     train_data = features[:TRAIN_SIZE]
@@ -65,19 +64,17 @@ def load_data_shuffle(data_path, pre_label_path):
 
 def model(dim_embedding, batch_s):
     # Building model
-    input_layer = tflearn.input_data(shape=[None, DIM_FEATURES], name='input')
+    input_layer = tflearn.input_data(shape=[None, DIM_FEATURES], dtype=tf.float64, name='input')
     input_text = input_layer[:, 0:DIM_TEXT]
     input_citation = input_layer[:, DIM_TEXT:DIM_TEXT + DIM_CITATION]
     input_section = input_layer[:, DIM_TEXT + DIM_CITATION:DIM_TEXT + DIM_CITATION + NUM_SEC]
-    input_section = onehot2categories(input_section)
     input_subsection = input_layer[:, DIM_TEXT + DIM_CITATION + NUM_SEC:]
-    input_subsection = onehot2categories(input_subsection)
-    # section_embedding = tf.Variable(tf.random_normal([NUM_SEC, 128]), name='group_embedding')
-    # subsection_embedding = tf.Variable(tf.random_normal([NUM_SUBS, 128]), name='group_embedding')
     textual_inf = tflearn.embedding(input_text, input_dim=142698, output_dim=dim_embedding, name='word_embedding')
-    section_embedding = tflearn.embedding(input_section, input_dim=NUM_SEC, output_dim=dim_embedding, name='section_embedding')
-    subsection_embedding = tflearn.embedding(input_subsection, input_dim=NUM_SUBS, output_dim=dim_embedding,
-                                             name='subsection_embedding')
+    section_embedding = tf.Variable(tf.random_normal([NUM_SEC, 128]), name='group_embedding')
+    subsection_embedding = tf.Variable(tf.random_normal([NUM_SUBS, 128]), name='group_embedding')
+    # section_embedding = tflearn.embedding(input_section, input_dim=NUM_SEC, output_dim=dim_embedding, name='section_embedding')
+    # subsection_embedding = tflearn.embedding(input_subsection, input_dim=NUM_SUBS, output_dim=dim_embedding,
+    #                                          name='subsection_embedding')
     class_embedding = tf.Variable(tf.random_normal([NUM_CLASS, dim_embedding]), name='class_embedding')
 
     textual_embedding = tflearn.lstm(textual_inf, dim_embedding, dropout=0.8, name='lstm')
@@ -90,7 +87,10 @@ def model(dim_embedding, batch_s):
     network = tflearn.sigmoid(network)
     # network = tflearn.regression(network, optimizer='adam', learning_rate=0.001, loss='categorical_crossentropy')
     # tflearn.objectives.binary_crossentropy(y_pred, y_true) Computes sigmoid cross entropy between y_pred (logits) and y_true (labels).
-    network = tflearn.regression(network, optimizer='adam', learning_rate=0.001, dtype=tf.float64, batch_size=batch_s, loss='binary_crossentropy')
+    # network = tflearn.regression(network, optimizer='adam', learning_rate=0.001, dtype=tf.float64, batch_size=batch_s,
+    #                              loss='binary_crossentropy')
+    network = tflearn.regression(network, optimizer='adam', learning_rate=0.001, dtype=tf.float64, batch_size=batch_s,
+                                 loss=loss_multilabel())
     return network
 
 
@@ -162,9 +162,9 @@ def print_evaluation_scores(test_labels_trans, test_predict_trans):
 
 # add early_stopping
 def train_predict(network, x, y, val_x, val_y, model_root_path, test_x, test_y, bs, epoch_num):
-    mdl = tflearn.DNN(network, tensorboard_dir=model_root_path+"/tflearn_logs/",
-                      checkpoint_path=model_root_path+"/model.tfl.ckpt")
-    model_file_path = model_root_path+"model.tfl"
+    mdl = tflearn.DNN(network, tensorboard_dir=model_root_path + "/tflearn_logs/",
+                      checkpoint_path=model_root_path + "/model.tfl.ckpt")
+    model_file_path = model_root_path + "model.tfl"
     if os.path.isfile(model_file_path):
         mdl.load(model_file_path)
     early_stopping_cb = EarlyStoppingCallback(val_acc_thresh=0.90)
@@ -180,9 +180,10 @@ def train_predict(network, x, y, val_x, val_y, model_root_path, test_x, test_y, 
     mdl.save(model_file_path)
     print('Model storage is finished')
     test_predict = mdl.predict(test_x)
-    test_predict_trans = [np.argmax(one_hot) for one_hot in test_predict]
-    test_labels_trans = [np.argmax(one_hot) for one_hot in test_y]
-    print_evaluation_scores(test_labels_trans, test_predict_trans)
+    test_predict_label = tf.cast(test_predict > 0.5, dtype=tf.int32)
+    # test_predict_trans = [np.argmax(one_hot) for one_hot in test_predict]
+    # test_labels_trans = [np.argmax(one_hot) for one_hot in test_y]
+    print_evaluation_scores(test_y, test_predict_label)
     print('Model predict is finished')
 
 
